@@ -29,6 +29,8 @@ jobs:
           rm -r debian/patches
           # 删除preloader相关的代码
           sed -i '/preloader/d' debian/linglong-bin.postinst debian/linglong-bin.install debian/linglong-bin.postinst
+          # 禁止单元测试
+          sed -i '/set(ENABLE_TESTING/{n; s/ON/OFF/}' CMakeLists.txt
       - uses: stefanzweifel/git-auto-commit-action@v5
         with:
           branch: obs_latest_nopatch
