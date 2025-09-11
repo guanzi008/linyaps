@@ -24,6 +24,7 @@
 #include "linglong/utils/file.h"
 #include "linglong/utils/finally/finally.h"
 #include "linglong/utils/gkeyfile_wrapper.h"
+#include "linglong/utils/log/log.h"
 #include "linglong/utils/packageinfo_handler.h"
 #include "linglong/utils/serialize/json.h"
 #include "linglong/utils/transaction.h"
@@ -1397,7 +1398,7 @@ void OSTreeRepo::pull(service::PackageTask &taskContext,
 
     auto sizes = this->getCommitSize(pullRepo.alias.value_or(pullRepo.name), refString);
     if (!sizes.has_value()) {
-        qWarning() << "get commit size error: " << sizes.error().message();
+        LogD("get commit size error: {}", sizes.error().message());
     } else if (sizes->size() >= 3) {
         data.needed_archived = sizes->at(0);
         data.needed_unpacked = sizes->at(1);
