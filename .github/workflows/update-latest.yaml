@@ -29,7 +29,7 @@ jobs:
           git reset --hard openatom/master
 
           # 仅同步 deepin 的 1.10 分支里的打包目录
-          git checkout deepin/release/20/1.10 -- debian
+          git checkout deepin/release/1.10 -- debian
 
           # 移除任何来自上游的 CI 配置，避免循环触发
           rm -rf .github || true
