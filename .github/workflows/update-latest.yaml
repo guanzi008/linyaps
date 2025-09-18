@@ -1,39 +1,65 @@
 name: Update latest
 on:
-  workflow_dispatch:
-  schedule:
-    - cron: "0 2 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - run: |
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync code and packaging from upstreams
+        run: |
+          set -euxo pipefail
+
+          # 添加上游仓库
           git remote add openatom https://github.com/OpenAtom-Linyaps/linyaps
           git fetch openatom --no-tags
+
           git remote add deepin https://github.com/deepin-community/linyaps
           git fetch deepin --no-tags
+
+          # 以 openatom/master 作为基线
           git reset --hard openatom/master
-          git checkout deepin/master debian
-          git checkout deepin/master rpm
-          rm -rf .github
-      - uses: stefanzweifel/git-auto-commit-action@v5
+
+          # 仅同步 deepin 的 1.10 分支里的打包目录
+          git checkout deepin/1.10 -- debian rpm
+
+          # 移除任何来自上游的 CI 配置，避免循环触发
+          rm -rf .github || true
+
+      - name: Commit as obs_latest (with deepin patches)
+        uses: stefanzweifel/git-auto-commit-action@v5
         with:
           branch: obs_latest
           create_branch: true
           push_options: --force
-          commit_message: Automated Change
-      
-      - run: |
-          # 删除patch
-          rm -r debian/patches
-          # 删除preloader相关的代码
-          sed -i '/preloader/d' debian/linglong-bin.postinst debian/linglong-bin.install debian/linglong-bin.postinst
-          # 禁止单元测试
-          sed -i '/set(ENABLE_TESTING/{n; s/ON/OFF/}' CMakeLists.txt
-      - uses: stefanzweifel/git-auto-commit-action@v5
+          commit_message: "Automated Change (sync OpenAtom base + deepin/1.10 packaging)"
+
+      - name: Make nopatch variant
+        run: |
+          set -euxo pipefail
+
+          # 删除 deepin 的 patches（nopatch 变体）
+          rm -rf debian/patches || true
+
+          # 删除 preloader 相关条目（文件可能不存在，失败不终止）
+          sed -i '/preloader/d' debian/linglong-bin.postinst || true
+          sed -i '/preloader/d' debian/linglong-bin.install || true
+
+          # 关闭单元测试（若 CMakeLists.txt 不同也不报错）
+          sed -i '/set(ENABLE_TESTING/{n; s/ON/OFF/}' CMakeLists.txt || true
+
+      - name: Commit as obs_latest_nopatch (without deepin patches)
+        uses: stefanzweifel/git-auto-commit-action@v5
         with:
           branch: obs_latest_nopatch
           create_branch: true
           push_options: --force
-          commit_message: Automated Change
+          commit_message: "Automated Change (nopatch variant for non-deepin builds)"
