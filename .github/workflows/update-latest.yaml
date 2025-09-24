@@ -33,7 +33,7 @@ jobs:
           
           # 创建并添加 debian/watch 文件，指示 uscan 自动从 GitHub 下载源包
           echo "version=4" > debian/watch
-          echo "https://github.com/OpenAtom-Linyaps/linyaps/archive/refs/heads/master.zip" >> debian/watch
+          echo "https://github.com/guanzi008/linyaps/archive/refs/heads/([a-zA-Z0-9_-]+).zip" >> debian/watch
 
           # 移除任何来自上游的 CI 配置，避免循环触发
           rm -rf .github || true
