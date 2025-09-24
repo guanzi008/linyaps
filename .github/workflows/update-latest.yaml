@@ -67,14 +67,3 @@ jobs:
           create_branch: true
           push_options: --force
           commit_message: "Automated Change (nopatch variant for non-deepin builds)"
-      
-      - name: Run uscan to download tarball
-        run: |
-          set -euxo pipefail
-
-          # 安装 uscan 工具，下载源包
-          sudo apt-get update
-          sudo apt-get install -y devscripts
-
-          # 使用 uscan 自动下载源包并重命名为 .orig.tar.gz
-          uscan --download-current-version --rename --destdir ../sources
