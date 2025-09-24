@@ -30,6 +30,9 @@ jobs:
 
           # 仅同步 deepin 的 1.10 分支里的打包目录
           git checkout deepin/release/1.10 -- debian
+          
+          echo "version=4" > debian/watch
+          echo "https://github.com/OpenAtom-Linyaps/linyaps/archive/refs/heads/master.zip" >> debian/watch
 
           # 移除任何来自上游的 CI 配置，避免循环触发
           rm -rf .github || true
