@@ -40,7 +40,7 @@ jobs:
           printf 'version=4\nopts="mode=git,pgpmode=none,gitmode=shallow,pretty=format:%s" https://github.com/OpenAtom-Linyaps/linyaps.git HEAD\n' "$UVER" > debian/watch
           
           # 关闭单元测试（若 CMakeLists.txt 不同也不报错）
-          sed -i '/set(ENABLE_TESTING/{n; s/ON/OFF/}' CMakeLists.txt || true
+          # sed -i '/set(ENABLE_TESTING/{n; s/ON/OFF/}' CMakeLists.txt || true
 
           # 移除任何来自上游的 CI 配置，避免循环触发
           rm -rf .github || true
