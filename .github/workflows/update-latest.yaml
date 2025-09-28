@@ -31,9 +31,15 @@ jobs:
           # 仅同步 deepin 的 1.10 分支里的打包目录
           git checkout deepin/release/1.10 -- debian
           
-          # 创建并添加 debian/watch 文件，指示 uscan 自动从 GitHub 下载源包
+          # # 创建并添加 debian/watch 文件，指示 uscan 自动从 GitHub 下载源包
           # echo "version=4" > debian/watch
-          # echo "https://github.com/guanzi008/linyaps/archive/refs/heads/([a-zA-Z0-9_-]+).zip" >> debian/watch
+          # echo "opts="mode=git,pgpmode=none,gitmode=shallow,pretty=format:1.9.13" https://github.com/OpenAtom-Linyaps/linyaps.git HEAD" >> debian/watch
+          # 创建 debian/watch（版本号自动从 changelog 提取）
+          VER=$(dpkg-parsechangelog -S Version)
+          UVER=${VER%%-*}   # 去掉 -1 等 Debian 修订
+          printf 'version=4\nopts="mode=git,pgpmode=none,gitmode=shallow,pretty=format:%s" https://github.com/OpenAtom-Linyaps/linyaps.git HEAD\n' "$UVER" > debian/watch
+
+
 
           # 移除任何来自上游的 CI 配置，避免循环触发
           rm -rf .github || true
