@@ -92,6 +92,40 @@ jobs:
           mv ../${PKG}_${VER}.debian.tar.*        dist/ || true
           mv ../${PKG}_${UVER}.orig.tar.*         dist/
 
+      
+      - name: Prepare osc (secrets → env → oscrc)
+        env:
+          OBS_APIURL: ${{ secrets.OBS_APIURL }}
+          OBS_USER:   ${{ secrets.OBS_USER }}
+          OBS_PASS:   ${{ secrets.OBS_PASS }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y osc ca-certificates
+      
+          # 简单检查 env 是否注入（不打印值，打印长度）
+          test -n "${OBS_APIURL:-}" || { echo "OBS_APIURL is empty"; exit 1; }
+          test -n "${OBS_USER:-}"   || { echo "OBS_USER is empty"; exit 1; }
+          test -n "${OBS_PASS:-}"   || { echo "OBS_PASS is empty"; exit 1; }
+      
+          umask 077
+          # 写两份以兼容不同 osc 版本的默认路径
+          cat > ~/.oscrc <<EOF
+          [general]
+          apiurl = ${OBS_APIURL}
+          sslcertck = 1
+          
+          [${OBS_APIURL}]
+          user = ${OBS_USER}
+          pass = ${OBS_PASS}
+          EOF
+          mkdir -p ~/.config/osc
+          cp ~/.oscrc ~/.config/osc/oscrc
+      
+          # 自检：API 可达
+          osc -A "${OBS_APIURL}" api / >/dev/null || {
+            echo "osc api probe failed for ${OBS_APIURL}"; exit 1; }
+
       - name: Upload to OBS (Deepin:23/linyaps616)
         env:
           OBS_APIURL: ${{ secrets.OBS_APIURL }}
