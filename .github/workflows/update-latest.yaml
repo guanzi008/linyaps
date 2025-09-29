@@ -14,35 +14,35 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install build & obs tools
+        run: |
+          sudo apt-get update
+          # uscan/mk-origtargz 在 devscripts 里；osc 为 OBS CLI
+          sudo apt-get install -y devscripts git-buildpackage dpkg-dev debhelper quilt fakeroot ca-certificates osc
+
       - name: Sync code and packaging from upstreams
         run: |
           set -euxo pipefail
 
-          # 添加上游仓库
-          git remote add openatom https://github.com/OpenAtom-Linyaps/linyaps
+          # 添加上游
+          git remote add openatom https://github.com/OpenAtom-Linyaps/linyaps || true
           git fetch openatom --no-tags
 
-          git remote add deepin https://github.com/deepin-community/linyaps
+          git remote add deepin https://github.com/deepin-community/linyaps || true
           git fetch deepin --no-tags
 
-          # 以 openatom/master 作为基线
+          # 以 openatom/master 为基线
           git reset --hard openatom/master
 
-          # 仅同步 deepin 的 1.10 分支里的打包目录
+          # 仅同步 deepin 1.10 的 debian/ 打包目录
           git checkout deepin/release/1.10 -- debian
-          
-          # # 创建并添加 debian/watch 文件，指示 uscan 自动从 GitHub 下载源包
-          # echo "version=4" > debian/watch
-          # echo "opts="mode=git,pgpmode=none,gitmode=shallow,pretty=format:1.9.13" https://github.com/OpenAtom-Linyaps/linyaps.git HEAD" >> debian/watch
-          # 创建 debian/watch（版本号自动从 changelog 提取）
-          VER=$(dpkg-parsechangelog -S Version)
-          UVER=${VER%%-*}   # 去掉 -1 等 Debian 修订
-          printf 'version=4\nopts="mode=git,pgpmode=none,gitmode=shallow,pretty=format:%s" https://github.com/OpenAtom-Linyaps/linyaps.git HEAD\n' "$UVER" > debian/watch
-          
-          # 关闭单元测试（若 CMakeLists.txt 不同也不报错）
-          # sed -i '/set(ENABLE_TESTING/{n; s/ON/OFF/}' CMakeLists.txt || true
 
-          # 移除任何来自上游的 CI 配置，避免循环触发
+          # 根据 changelog 自动写 debian/watch
+          VER=$(dpkg-parsechangelog -S Version)
+          UVER=${VER%%-*}
+          printf 'version=4\nopts="mode=git,pgpmode=none,gitmode=shallow,pretty=format:%s" https://github.com/OpenAtom-Linyaps/linyaps.git HEAD\n' "$UVER" > debian/watch
+
+          # 避免循环触发
           rm -rf .github || true
 
       - name: Commit as obs_latest (with deepin patches)
@@ -53,18 +53,13 @@ jobs:
           push_options: --force
           commit_message: "Automated Change (sync OpenAtom base + deepin/1.10 packaging)"
 
+      # 如需“无补丁”分支，保留；不需要可删掉下面两步
       - name: Make nopatch variant
         run: |
           set -euxo pipefail
-
-          # 删除 deepin 的 patches（nopatch 变体）
           rm -rf debian/patches || true
-
-          # 删除 preloader 相关条目（文件可能不存在，失败不终止）
           sed -i '/preloader/d' debian/linglong-bin.postinst || true
           sed -i '/preloader/d' debian/linglong-bin.install || true
-
-          # 关闭单元测试（若 CMakeLists.txt 不同也不报错）
           sed -i '/set(ENABLE_TESTING/{n; s/ON/OFF/}' CMakeLists.txt || true
 
       - name: Commit as obs_latest_nopatch (without deepin patches)
@@ -74,3 +69,49 @@ jobs:
           create_branch: true
           push_options: --force
           commit_message: "Automated Change (nopatch variant for non-deepin builds)"
+
+      # —— 从这里开始：在 CI 里直接 uscan + 构建 source 包 ——
+      - name: Build source package (obs_latest)
+        run: |
+          set -euxo pipefail
+          # 用带补丁的分支构建；要换“无补丁”就改成 obs_latest_nopatch
+          git checkout obs_latest
+
+          # 生成 orig.tar.*（放到上一级目录）
+          uscan --force-download --rename --verbose
+
+          # 构建 source-only 包（生成 .dsc/.debian.tar.* 到上一级目录）
+          dpkg-buildpackage -S -us -uc
+
+          # 收集产物
+          PKG=$(dpkg-parsechangelog -S Source)
+          VER=$(dpkg-parsechangelog -S Version)
+          UVER=${VER%%-*}
+          mkdir -p dist
+          mv ../${PKG}_${VER}.dsc                 dist/
+          mv ../${PKG}_${VER}.debian.tar.*        dist/ || true
+          mv ../${PKG}_${UVER}.orig.tar.*         dist/
+
+      - name: Upload to OBS (Deepin:23/linyaps616)
+        env:
+          OBS_APIURL: ${{ secrets.OBS_APIURL }}
+          OBS_USER:   ${{ secrets.OBS_USER }}
+          OBS_PASS:   ${{ secrets.OBS_PASS }}
+          OBS_PROJECT: Deepin:23
+          OBS_PACKAGE: linyaps616
+        run: |
+          set -euxo pipefail
+          # 校验产物
+          ls -l dist
+
+          # 用 osc 上传
+          workdir="$(pwd)"
+          osc -A "$OBS_APIURL" --no-keyring checkout "$OBS_PROJECT" "$OBS_PACKAGE"
+          cd "$OBS_PROJECT/$OBS_PACKAGE"
+
+          # 覆盖旧文件
+          cp -f "$workdir"/dist/* ./
+          osc -A "$OBS_APIURL" addremove
+
+          # 提交
+          osc -A "$OBS_APIURL" commit -m "CI: update sources from obs_latest ($(date -u +%F))"
