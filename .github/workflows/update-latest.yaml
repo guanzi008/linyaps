@@ -81,7 +81,7 @@ jobs:
           uscan --force-download --rename --verbose
 
           # 构建 source-only 包（生成 .dsc/.debian.tar.* 到上一级目录）
-          dpkg-buildpackage -S -us -uc
+          dpkg-buildpackage -S -us -uc -d
 
           # 收集产物
           PKG=$(dpkg-parsechangelog -S Source)
