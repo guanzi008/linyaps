@@ -171,7 +171,13 @@ jobs:
           git checkout obs_latest_nopatch
           
           # 生成 orig.tar.*（放到上一级目录）
-          uscan --force-download --rename --verbose
+          # uscan --force-download --rename --verbose
+          VER=$(dpkg-parsechangelog -SVersion)      # 例：1:1.9.13+obs1-2 或 1.9.13-1deepin
+          PKG=$(dpkg-parsechangelog -SSource)       # 例：linglong
+          UVER="${VER#*:}"   # 去掉可选 epoch（形如 "1:"；若无则不变）
+          UVER="${UVER%-*}"  # 去掉最后一个连字符及其后面（若无 '-' 则不变）
+          echo "$UVER"
+          tar -cJf "../${PKG}_${UVER}.orig.tar.xz" .
 
           # 构建 source-only 包
           dpkg-buildpackage -S -us -uc -d
