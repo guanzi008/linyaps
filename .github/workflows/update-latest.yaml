@@ -162,3 +162,70 @@ jobs:
 
           # 提交
           osc -A "$OBS_APIURL" commit -m "CI: update sources from obs_latest ($(date -u +%F))"
+      # —— 追加：无补丁分支再次打 source 包 ——
+      - name: Build source package (obs_latest_nopatch)
+        run: |
+          set -euxo pipefail
+          git checkout obs_latest_nopatch
+
+          # 生成 orig.tar.*（放到上一级目录）
+          uscan --force-download --rename --verbose
+
+          # 构建 source-only 包
+          dpkg-buildpackage -S -us -uc -d
+
+          # 收集产物
+          PKG=$(dpkg-parsechangelog -S Source)
+          VER=$(dpkg-parsechangelog -S Version)
+          UVER=${VER%%-*}
+          mkdir -p dist_nopatch
+          mv ../${PKG}_${VER}.dsc                 dist_nopatch/
+          mv ../${PKG}_${VER}.debian.tar.*        dist_nopatch/ || true
+          mv ../${PKG}_${UVER}.orig.tar.*         dist_nopatch/
+
+      # —— 追加：为 obs2（build.opensuse.org）准备 osc —— 
+      - name: Prepare osc for obs2 (api.opensuse.org)
+        env:
+          OBS2_APIURL: ${{ secrets.OBS2_APIURL }}   # 建议直接设为 https://api.opensuse.org
+          OBS2_USER:   ${{ secrets.OBS2_USER }}
+          OBS2_PASS:   ${{ secrets.OBS2_PASS }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y osc ca-certificates
+
+          test -n "${OBS2_APIURL:-}" || { echo "OBS2_APIURL is empty"; exit 1; }
+          test -n "${OBS2_USER:-}"   || { echo "OBS2_USER is empty"; exit 1; }
+          test -n "${OBS2_PASS:-}"   || { echo "OBS2_PASS is empty"; exit 1; }
+
+          umask 077
+          mkdir -p ~/.config/osc
+          # 追加另一个 api 段落，不覆盖前面的 oscrc
+          if [ -f ~/.config/osc/oscrc ]; then cp ~/.config/osc/oscrc ~/.oscrc; fi
+          {
+            echo "[${OBS2_APIURL}]"
+            echo "user = ${OBS2_USER}"
+            echo "pass = ${OBS2_PASS}"
+          } >> ~/.oscrc
+          cp ~/.oscrc ~/.config/osc/oscrc
+
+          # 自检
+          osc -A "${OBS2_APIURL}" api / >/dev/null
+
+      # —— 追加：上传无补丁产物到 obs2 —— 
+      - name: Upload to OBS2 (e.g. home:guanzi/linyaps)
+        env:
+          OBS2_APIURL: ${{ secrets.OBS2_APIURL }}
+          OBS2_PROJECT: home:guanzi   # 例如 home:yourname:linyaps
+          OBS2_PACKAGE: linyaps   # 例如 linyaps-nopatch
+        run: |
+          set -euxo pipefail
+          ls -l dist_nopatch
+
+          workdir="$(pwd)"
+          osc -A "$OBS2_APIURL" --no-keyring checkout "$OBS2_PROJECT" "$OBS2_PACKAGE"
+          cd "$OBS2_PROJECT/$OBS2_PACKAGE"
+
+          cp -f "$workdir"/dist_nopatch/* ./       # 覆盖旧文件
+          osc -A "$OBS2_APIURL" addremove
+          osc -A "$OBS2_APIURL" commit -m "CI: update sources from obs_latest_nopatch ($(date -u +%F))"
