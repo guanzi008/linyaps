@@ -163,11 +163,13 @@ jobs:
           # 提交
           osc -A "$OBS_APIURL" commit -m "CI: update sources from obs_latest ($(date -u +%F))"
       # —— 追加：无补丁分支再次打 source 包 ——
-      - name: Build source package (obs_latest_nopatch)
+      - name: Build source package (obs_latest_nopatch) in a fresh worktree
         run: |
           set -euxo pipefail
+          git worktree add ../wt-nopatch obs_latest_nopatch
+          cd ../wt-nopatch
           git checkout obs_latest_nopatch
-
+          
           # 生成 orig.tar.*（放到上一级目录）
           uscan --force-download --rename --verbose
 
