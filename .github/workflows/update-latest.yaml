@@ -177,7 +177,6 @@ jobs:
           # 用 tar 打“纯上游” orig（带过滤与顶层目录重命名）
           MTIME=$(git log -1 --format=%ct || true)
           XZ_OPT="-T0" tar \
-            -cJf "../${PKG}_${UVER}.orig.tar.xz" . \
             --sort=name --owner=0 --group=0 --numeric-owner \
             ${MTIME:+--mtime="@${MTIME}"} \
             --transform "s,^\./,${PKG}-${UVER}/," \
@@ -185,8 +184,10 @@ jobs:
             --exclude='./.git' --exclude='./.github' \
             --exclude='./dist' --exclude='./dist_*' \
             --exclude='./.osc' --exclude='./Deepin:23' \
-            --exclude='./*.orig.tar.*' --exclude='./*.debian.tar.*' --exclude='./*.dsc'
-      
+            --exclude='./*.orig.tar.*' --exclude='./*.debian.tar.*' --exclude='./*.dsc' \
+            -cJf "../${PKG}_${UVER}.orig.tar.xz" \
+            .
+
           # 出 source-only 包
           dpkg-buildpackage -S -us -uc -d
       
