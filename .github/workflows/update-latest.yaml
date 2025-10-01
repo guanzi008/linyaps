@@ -92,6 +92,19 @@ jobs:
           mv ../${PKG}_${VER}.debian.tar.*        dist/ || true
           mv ../${PKG}_${UVER}.orig.tar.*         dist/
 
+          # 连接 Tailscale：创建临时（ephemeral）节点，并打上 tag:ci
+      - name: Connect Tailscale (ephemeral)
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+          # 可选：固定客户端版本或用最新
+          version: latest
+          # 可选：缓存 tailscale 二进制，加快后续任务
+          use-cache: 'true'
+          # 可选：让动作等待这些目标可达（缓解“最终一致性”传播延迟）
+          targets: 100.97.154.108
       
       - name: Prepare osc (secrets → env → oscrc)
         env:
