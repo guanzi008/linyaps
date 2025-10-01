@@ -168,28 +168,41 @@ jobs:
           set -euxo pipefail
           git worktree add ../wt-nopatch obs_latest_nopatch
           cd ../wt-nopatch
-          git checkout obs_latest_nopatch
-          
-          # 生成 orig.tar.*（放到上一级目录）
-          # uscan --force-download --rename --verbose
-          VER=$(dpkg-parsechangelog -SVersion)      # 例：1:1.9.13+obs1-2 或 1.9.13-1deepin
-          PKG=$(dpkg-parsechangelog -SSource)       # 例：linglong
-          UVER="${VER#*:}"   # 去掉可选 epoch（形如 "1:"；若无则不变）
-          UVER="${UVER%-*}"  # 去掉最后一个连字符及其后面（若无 '-' 则不变）
-          echo "$UVER"
-          tar -cJf "../${PKG}_${UVER}.orig.tar.xz" .
-
-          # 构建 source-only 包
+      
+          # 版本信息
+          VER=$(dpkg-parsechangelog -SVersion)      # e.g. 1:1.9.13-1deepin
+          PKG=$(dpkg-parsechangelog -SSource)       # e.g. linglong
+          UVER="${VER#*:}"; UVER="${UVER%-*}"       # 去 epoch + 去 deb 修订 → 1.9.13
+      
+          # 用 tar 打“纯上游” orig（带过滤与顶层目录重命名）
+          MTIME=$(git log -1 --format=%ct || true)
+          XZ_OPT="-T0" tar \
+            -cJf "../${PKG}_${UVER}.orig.tar.xz" . \
+            --sort=name --owner=0 --group=0 --numeric-owner \
+            ${MTIME:+--mtime="@${MTIME}"} \
+            --transform "s,^\./,${PKG}-${UVER}/," \
+            --exclude='./debian' \
+            --exclude='./.git' --exclude='./.github' \
+            --exclude='./dist' --exclude='./dist_*' \
+            --exclude='./.osc' --exclude='./Deepin:23' \
+            --exclude='./*.orig.tar.*' --exclude='./*.debian.tar.*' --exclude='./*.dsc'
+      
+          # 出 source-only 包
           dpkg-buildpackage -S -us -uc -d
+      
+          # 收集产物到“主工作区”的 dist_nopatch（注意用 $GITHUB_WORKSPACE）
+          PKG=$(dpkg-parsechangelog -SSource)
+          VER=$(dpkg-parsechangelog -SVersion)
+          UVER="${VER#*:}"; UVER="${UVER%-*}"
+      
+          mkdir -p "$GITHUB_WORKSPACE/dist_nopatch"
+          mv -f ../${PKG}_${VER}.dsc                  "$GITHUB_WORKSPACE/dist_nopatch/"
+          mv -f ../${PKG}_${VER}.debian.tar.*         "$GITHUB_WORKSPACE/dist_nopatch/" || true
+          mv -f ../${PKG}_${UVER}.orig.tar.*          "$GITHUB_WORKSPACE/dist_nopatch/"
+      
+          # 返回主工作区
+          cd "$GITHUB_WORKSPACE"
 
-          # 收集产物
-          PKG=$(dpkg-parsechangelog -S Source)
-          VER=$(dpkg-parsechangelog -S Version)
-          UVER=${VER%%-*}
-          mkdir -p dist_nopatch
-          mv ../${PKG}_${VER}.dsc                 dist_nopatch/
-          mv ../${PKG}_${VER}.debian.tar.*        dist_nopatch/ || true
-          mv ../${PKG}_${UVER}.orig.tar.*         dist_nopatch/
 
       # —— 追加：为 obs2（build.opensuse.org）准备 osc —— 
       - name: Prepare osc for obs2 (api.opensuse.org)
@@ -234,6 +247,6 @@ jobs:
           osc -A "$OBS2_APIURL" --no-keyring checkout "$OBS2_PROJECT" "$OBS2_PACKAGE"
           cd "$OBS2_PROJECT/$OBS2_PACKAGE"
 
-          cp -f "$workdir"/wt-nopatch/dist_nopatch/* ./       # 覆盖旧文件
+          cp -f "$workdir"/dist_nopatch/* ./                   # 覆盖旧文件
           osc -A "$OBS2_APIURL" addremove
           osc -A "$OBS2_APIURL" commit -m "CI: update sources from obs_latest_nopatch ($(date -u +%F))"
