@@ -234,6 +234,6 @@ jobs:
           osc -A "$OBS2_APIURL" --no-keyring checkout "$OBS2_PROJECT" "$OBS2_PACKAGE"
           cd "$OBS2_PROJECT/$OBS2_PACKAGE"
 
-          cp -f "$workdir"/dist_nopatch/* ./       # 覆盖旧文件
+          cp -f "$workdir"/wt-nopatch/dist_nopatch/* ./       # 覆盖旧文件
           osc -A "$OBS2_APIURL" addremove
           osc -A "$OBS2_APIURL" commit -m "CI: update sources from obs_latest_nopatch ($(date -u +%F))"
