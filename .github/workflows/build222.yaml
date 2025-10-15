@@ -149,10 +149,10 @@ jobs:
           test -n "${OBS_PASS:-}" || { echo "OBS_PASS is empty"; exit 1; }
           umask 077
           cat > ~/.oscrc <<EOF
-[${OBS_APIURL}]
-user = ${OBS_USER}
-pass = ${OBS_PASS}
-EOF
+          [${OBS_APIURL}]
+          user = ${OBS_USER}
+          pass = ${OBS_PASS}
+          EOF
           # 自检
           osc -A "${OBS_APIURL}" api / >/dev/null
 
