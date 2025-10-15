@@ -247,10 +247,10 @@ jobs:
           # 追加另一个 api 段落，不覆盖前面的 oscrc
           if [ -f ~/.config/osc/oscrc ]; then cp ~/.config/osc/oscrc ~/.oscrc; fi
           cat >> ~/.oscrc <<EOF
-[${OBS2_APIURL}]
-user = ${OBS2_USER}
-pass = ${OBS2_PASS}
-EOF
+          [${OBS2_APIURL}]
+          user = ${OBS2_USER}
+          pass = ${OBS2_PASS}
+          EOF
           cp ~/.oscrc ~/.config/osc/oscrc
           # 自检
           osc -A "${OBS2_APIURL}" api / >/dev/null
