@@ -791,6 +791,10 @@ int Cli::run(const RunOptions &options)
     cfgBuilder.bindHome(homeEnv).enablePrivateDir();
 
     if (restrictFilesystem) {
+        cfgBuilder.disableHostHomeBind();
+    }
+
+    if (restrictFilesystem) {
         cfgBuilder.mapPrivate(std::string{ homeEnv }, true);
     } else {
         cfgBuilder.mapPrivate(std::string{ homeEnv } + "/.ssh", true)
