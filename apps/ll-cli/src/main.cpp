@@ -5,6 +5,8 @@
  */
 #include "configure.h"
 #include "linglong/api/dbus/v1/dbus_peer.h"
+#include "linglong/api/types/v1/Generators.hpp"
+#include "linglong/api/types/v1/PackageInfoV2.hpp"
 #include "linglong/cli/cli.h"
 #include "linglong/cli/cli_printer.h"
 #include "linglong/cli/dbus_notifier.h"
@@ -696,11 +698,16 @@ static std::filesystem::path getBaseConfigDir()
     return {};
 }
 
-static std::filesystem::path getConfigPath(Scope scope,
-                                           const std::string &appId,
-                                           const std::string &baseId)
+static std::filesystem::path getSystemConfigDir()
 {
-    auto base = getBaseConfigDir();
+    return std::filesystem::path(LINGLONG_DATA_DIR) / "config";
+}
+
+static std::filesystem::path buildConfigPath(const std::filesystem::path &base,
+                                             Scope scope,
+                                             const std::string &appId,
+                                             const std::string &baseId)
+{
     if (base.empty()) {
         return {};
     }
@@ -715,6 +722,36 @@ static std::filesystem::path getConfigPath(Scope scope,
     return {};
 }
 
+static std::filesystem::path getConfigPath(Scope scope,
+                                           const std::string &appId,
+                                           const std::string &baseId)
+{
+    return buildConfigPath(getBaseConfigDir(), scope, appId, baseId);
+}
+
+static std::vector<std::filesystem::path> getConfigSearchPaths(Scope scope,
+                                                               const std::string &appId,
+                                                               const std::string &baseId)
+{
+    std::vector<std::filesystem::path> paths;
+    std::unordered_set<std::string> seen;
+    auto addPath = [&](const std::filesystem::path &candidate) {
+        if (candidate.empty()) {
+            return;
+        }
+        auto normalized = candidate.lexically_normal();
+        auto key = normalized.string();
+        if (!key.empty() && seen.insert(key).second) {
+            paths.emplace_back(std::move(normalized));
+        }
+    };
+
+    addPath(buildConfigPath(getBaseConfigDir(), scope, appId, baseId));
+    addPath(buildConfigPath(getSystemConfigDir(), scope, appId, baseId));
+
+    return paths;
+}
+
 static bool ensureParentDir(const std::filesystem::path &p)
 {
     std::error_code ec;
@@ -725,15 +762,22 @@ static bool ensureParentDir(const std::filesystem::path &p)
     return std::filesystem::create_directories(parent, ec) || std::filesystem::exists(parent);
 }
 
-static std::optional<json> readJsonIfExists(const std::filesystem::path &p)
+static std::optional<json> readJsonIfExists(const std::filesystem::path &p, bool *existed = nullptr)
 {
     try {
-        if (!std::filesystem::exists(p)) {
+        std::error_code ec;
+        if (!std::filesystem::exists(p, ec)) {
+            if (existed) {
+                *existed = false;
+            }
             return json::object();
         }
         std::ifstream in(p);
         if (!in.is_open()) {
             return std::nullopt;
+        }
+        if (existed) {
+            *existed = true;
         }
         json j;
         in >> j;
@@ -1042,20 +1086,76 @@ int runCliApplication(int argc, char **mainArgv)
                 }
                 return { Scope::App, t, "", start + 1 };
             };
+
+            auto loadCliConfigFromPackage = [&](Scope scope,
+                                                const std::string &appId,
+                                                const std::string &baseId)
+              -> std::optional<json> {
+                if (scope == Scope::Global) {
+                    return std::nullopt;
+                }
+
+                auto repoResult = initOSTreeRepo();
+                if (!repoResult) {
+                    qWarning() << "load cli config from package failed:" << repoResult.error();
+                    return std::nullopt;
+                }
+
+                auto *repoPtr = *repoResult;
+                auto list = repoPtr->listLocal();
+                if (!list) {
+                    qWarning() << "list local packages failed:" << list.error();
+                    return std::nullopt;
+                }
+
+                const auto matcher = [&](const linglong::api::types::v1::PackageInfoV2 &info) -> bool {
+                    if (scope == Scope::App) {
+                        return info.id == appId && info.kind == "app";
+                    }
+                    if (scope == Scope::Base) {
+                        return info.id == baseId && info.kind == "base";
+                    }
+                    return false;
+                };
+
+                auto it = std::find_if(list->begin(), list->end(), matcher);
+                if (it == list->end() || !it->cliConfig) {
+                    return std::nullopt;
+                }
+
+                json packaged = *(it->cliConfig);
+                return packaged;
+            };
+
             auto openConfig = [&](Scope scope,
                                   const std::string &appId,
                                   const std::string &baseId) -> std::optional<json> {
-                auto path = getConfigPath(scope, appId, baseId);
-                if (path.empty()) {
+                auto userPath = getConfigPath(scope, appId, baseId);
+                if (userPath.empty()) {
                     fprintf(stderr, "invalid config path\n");
                     return std::nullopt;
                 }
-                auto j = readJsonIfExists(path);
-                if (!j) {
-                    fprintf(stderr, "failed to read %s\n", path.string().c_str());
+                bool userExists = false;
+                auto userJson = readJsonIfExists(userPath, &userExists);
+                if (!userJson) {
+                    fprintf(stderr, "failed to read %s\n", userPath.string().c_str());
                     return std::nullopt;
                 }
-                return j;
+                if (!userExists) {
+                    auto searchPaths = getConfigSearchPaths(scope, appId, baseId);
+                    for (size_t idx = 1; idx < searchPaths.size(); ++idx) {
+                        bool existed = false;
+                        auto fallback = readJsonIfExists(searchPaths[idx], &existed);
+                        if (!fallback || !existed) {
+                            continue;
+                        }
+                        return fallback;
+                    }
+                    if (auto packaged = loadCliConfigFromPackage(scope, appId, baseId)) {
+                        return packaged;
+                    }
+                }
+                return userJson;
             };
             auto saveConfig = [&](Scope scope,
                                   const std::string &appId,
