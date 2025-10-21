@@ -11,7 +11,311 @@
 
 #include <utility>
 
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <nlohmann/json.hpp>
+#include <optional>
+#include <sstream>
+
 namespace linglong::runtime {
+
+static std::vector<std::string> loadExtensionsFromConfig(const std::string &appId)
+{
+    namespace fs = std::filesystem;
+    std::vector<std::string> result;
+    
+    // 1. 获取配置目录：优先使用 XDG_CONFIG_HOME，否则使用 $HOME/.config
+    const char *xdgConfigHome = ::getenv("XDG_CONFIG_HOME");
+    std::string baseConfigDir;
+    if (xdgConfigHome && xdgConfigHome[0] != '\0') {
+        baseConfigDir = xdgConfigHome;
+    } else {
+        const char *homeEnv = ::getenv("HOME");
+        if (!homeEnv || homeEnv[0] == '\0') {
+            return result;
+        }
+        baseConfigDir = std::string(homeEnv) + "/.config";
+    }
+    
+    fs::path basePath = fs::path(baseConfigDir) / "linglong";
+    
+    // 2. 定义解析函数：从指定 JSON 文件提取 "extensions" 数组，并加入 result
+    auto parseExtensions = [&](const fs::path &p) {
+        try {
+            if (!fs::exists(p)) return;
+            std::ifstream in(p);
+            if (!in.is_open()) return;
+            nlohmann::json j;
+            in >> j;
+            if (!j.contains("extensions") || !j.at("extensions").is_array()) return;
+            for (const auto &elem : j.at("extensions")) {
+                if (elem.is_string()) {
+                    std::string ext = elem.get<std::string>();
+                    if (std::find(result.begin(), result.end(), ext) == result.end()) {
+                        result.emplace_back(std::move(ext));
+                    }
+                }
+            }
+        } catch (...) {
+            // 文件不存在或解析失败时忽略
+        }
+    };
+    
+    // 3. 依次解析全局配置与应用配置
+    parseExtensions(basePath / "config.json");
+    if (!appId.empty()) {
+        parseExtensions(basePath / "apps" / appId / "config.json");
+    }
+    
+    return result;
+}
+
+static std::vector<std::string> loadExtensionsFromBase(const std::string &baseId)
+{
+    namespace fs = std::filesystem;
+    std::vector<std::string> result;
+
+    const char *xdgConfigHome = ::getenv("XDG_CONFIG_HOME");
+    std::string baseConfigDir;
+    if (xdgConfigHome && xdgConfigHome[0] != '\0') {
+        baseConfigDir = xdgConfigHome;
+    } else {
+        const char *homeEnv = ::getenv("HOME");
+        if (!homeEnv || homeEnv[0] == '\0') {
+            return result;
+        }
+        baseConfigDir = std::string(homeEnv) + "/.config";
+    }
+    fs::path cfgPath = fs::path(baseConfigDir) / "linglong" / "base" / baseId / "config.json";
+
+    try {
+        if (!fs::exists(cfgPath)) {
+            return result;
+        }
+        std::ifstream in(cfgPath);
+        if (!in.is_open()) {
+            return result;
+        }
+        nlohmann::json j;
+        in >> j;
+        if (!j.contains("extensions") || !j.at("extensions").is_array()) {
+            return result;
+        }
+        for (const auto &elem : j.at("extensions")) {
+            if (elem.is_string()) {
+                std::string ext = elem.get<std::string>();
+                if (std::find(result.begin(), result.end(), ext) == result.end()) {
+                    result.emplace_back(std::move(ext));
+                }
+            }
+        }
+    } catch (...) {
+        // ignore parse errors
+    }
+    return result;
+}
+
+// ===== begin: config helpers for env/mount/commands (Global->Base->App merge) =====
+using json = nlohmann::json;
+
+static json loadMergedJsonWithBase(const std::string &appId, const std::string &baseId)
+{
+    namespace fs = std::filesystem;
+    json merged = json::object();
+
+    auto readIfExists = [](const fs::path &p) -> std::optional<json> {
+        try {
+            if (!fs::exists(p)) {
+                return std::nullopt;
+            }
+            std::ifstream in(p);
+            if (!in.is_open()) {
+                return std::nullopt;
+            }
+            json j;
+            in >> j;
+            return j;
+        } catch (...) {
+            return std::nullopt;
+        }
+    };
+
+    const char *xdg = ::getenv("XDG_CONFIG_HOME");
+    std::string basePath = (xdg && xdg[0]) ? xdg
+                                           : (std::string(::getenv("HOME") ? ::getenv("HOME") : "")
+                                              + "/.config");
+    if (basePath.empty()) {
+        return merged;
+    }
+
+    fs::path root = fs::path(basePath) / "linglong";
+    if (auto g = readIfExists(root / "config.json")) {
+        merged.merge_patch(*g);
+    }
+    if (!baseId.empty()) {
+        if (auto b = readIfExists(root / "base" / baseId / "config.json")) {
+            merged.merge_patch(*b);
+        }
+    }
+    if (!appId.empty()) {
+        if (auto a = readIfExists(root / "apps" / appId / "config.json")) {
+            merged.merge_patch(*a);
+        }
+    }
+    return merged;
+}
+
+static std::string expandUserHome(const std::string &path)
+{
+    if (path == "~" || path.rfind("~/", 0) == 0) {
+        const char *home = ::getenv("HOME");
+        if (home && home[0]) {
+            return path == "~" ? std::string(home) : (std::string(home) + path.substr(1));
+        }
+    }
+    return path;
+}
+
+static void collectEnvFromJson(const json &j, std::vector<std::string> &out)
+{
+    if (!j.contains("env") || !j.at("env").is_object()) {
+        return;
+    }
+    for (auto it = j.at("env").begin(); it != j.at("env").end(); ++it) {
+        const std::string key = it.key();
+        std::string val = it.value().is_string() ? it.value().get<std::string>() : std::string();
+        if (val.find('$') != std::string::npos) {
+            qWarning() << "ignore env with variable expansion:" << QString::fromStdString(key);
+            continue;
+        }
+        if (!key.empty() && key.back() == '+') {
+            out.emplace_back(key.substr(0, key.size() - 1) + "+=" + val);
+        } else {
+            out.emplace_back(key + "=" + val);
+        }
+    }
+}
+
+static void collectMountsFromJson(const std::string &appId,
+                                  const json &j,
+                                  std::vector<ocppi::runtime::config::types::Mount> &out)
+{
+    using Mount = ocppi::runtime::config::types::Mount;
+    if (!j.contains("filesystem") || !j.at("filesystem").is_array()) {
+        return;
+    }
+
+    for (const auto &e : j.at("filesystem")) {
+        if (!e.is_object()) {
+            continue;
+        }
+        std::string host = e.value("host", "");
+        std::string target = e.value("target", "");
+        std::string mode = e.value("mode", "ro");
+        bool persist = e.value("persist", false);
+
+        if (host.empty() || target.empty()) {
+            continue;
+        }
+        if (host.find('$') != std::string::npos || target.find('$') != std::string::npos) {
+            qWarning() << "ignore mount with variable expansion:" << QString::fromStdString(host)
+                       << "->" << QString::fromStdString(target);
+            continue;
+        }
+
+        host = expandUserHome(host);
+        if (persist) {
+            const char *home = ::getenv("HOME");
+            if (home && home[0] && !appId.empty()) {
+                std::filesystem::path p(home);
+                p /= ".var/app";
+                p /= appId;
+                p /= std::filesystem::path(host).filename();
+                host = p.string();
+            }
+        }
+
+        Mount m;
+        m.type = "bind";
+        m.source = host;
+        m.destination = target;
+        m.options = { { (mode == "rw" ? "rw" : "ro"), "rbind" } };
+        out.emplace_back(std::move(m));
+    }
+}
+
+struct CommandSettings {
+    std::vector<std::string> envKVs;
+    std::vector<ocppi::runtime::config::types::Mount> mounts;
+    std::vector<std::string> argsPrefix;
+    std::vector<std::string> argsSuffix;
+    std::optional<std::string> entrypoint;
+    std::optional<std::string> cwd;
+};
+
+static const json *pickCommandNode(const json &merged, const std::string &execName)
+{
+    if (!merged.contains("commands") || !merged.at("commands").is_object()) {
+        return nullptr;
+    }
+    const auto &cmds = merged.at("commands");
+    if (auto it = cmds.find(execName); it != cmds.end() && it->is_object()) {
+        return &(*it);
+    }
+    if (auto it = cmds.find("*"); it != cmds.end() && it->is_object()) {
+        return &(*it);
+    }
+    return nullptr;
+}
+
+static void loadStrVec(const json &node, const char *key, std::vector<std::string> &out)
+{
+    if (!node.contains(key) || !node.at(key).is_array()) {
+        return;
+    }
+    for (const auto &v : node.at(key)) {
+        if (v.is_string()) {
+            out.emplace_back(v.get<std::string>());
+        }
+    }
+}
+
+static CommandSettings parseCommandSettings(const std::string &appId, const json &node)
+{
+    CommandSettings cs;
+    if (node.contains("env") && node.at("env").is_object()) {
+        for (auto it = node.at("env").begin(); it != node.at("env").end(); ++it) {
+            const std::string key = it.key();
+            std::string val = it.value().is_string() ? it.value().get<std::string>() : std::string();
+            if (val.find('$') != std::string::npos) {
+                qWarning() << "ignore env with variable expansion in command settings:"
+                           << QString::fromStdString(key);
+                continue;
+            }
+            if (!key.empty() && key.back() == '+') {
+                cs.envKVs.emplace_back(key.substr(0, key.size() - 1) + "+=" + val);
+            } else {
+                cs.envKVs.emplace_back(key + "=" + val);
+            }
+        }
+    }
+    if (node.contains("filesystem") && node.at("filesystem").is_array()) {
+        collectMountsFromJson(appId, node, cs.mounts);
+    }
+    loadStrVec(node, "args_prefix", cs.argsPrefix);
+    loadStrVec(node, "args_suffix", cs.argsSuffix);
+    if (node.contains("entrypoint") && node.at("entrypoint").is_string()) {
+        cs.entrypoint = node.at("entrypoint").get<std::string>();
+    }
+    if (node.contains("cwd") && node.at("cwd").is_string()) {
+        cs.cwd = node.at("cwd").get<std::string>();
+    }
+    return cs;
+}
+// ===== end: config helpers =====
+
 
 RuntimeLayer::RuntimeLayer(package::Reference ref, RunContext &context)
     : reference(std::move(ref))
@@ -155,8 +459,46 @@ utils::error::Result<void> RunContext::resolve(const linglong::package::Referenc
     }
 
     // 手动解析多个扩展
+    // 先从命令行选项或配置文件获取扩展列表
+    // 先从命令行选项或应用/全局配置获取扩展列表
+    std::vector<std::string> extRefs;
     if (options.extensionRefs && !options.extensionRefs->empty()) {
-        auto manualExtensionDef = makeManualExtensionDefine(*options.extensionRefs);
+        extRefs = *options.extensionRefs;
+    } else {
+        extRefs = loadExtensionsFromConfig(runnable.id);
+    }
+
+    // 如果未获取到扩展列表，则尝试根据 base 层加载
+    if (extRefs.empty()) {
+        // 获取 baseId
+        std::string baseId;
+
+        // 1. 优先使用 ResolveOptions::baseRef（如果提供）
+        if (options.baseRef && !options.baseRef->empty()) {
+            // 假设存在 FuzzyReference::parse，可解析出 id 部分
+            auto baseRef = linglong::package::FuzzyReference::parse(*options.baseRef);
+            if (baseRef) {
+                baseId = baseRef->id;
+            }
+        }
+
+        // 2. 否则从当前运行包信息中获取
+        if (baseId.empty()) {
+            auto item = repo.getLayerItem(runnable);
+            if (item && !item->info.base.empty()) {
+                baseId = item->info.base;
+            }
+        }
+
+        // 3. 若 baseId 非空，则读取 base 配置
+        if (!baseId.empty()) {
+            extRefs = loadExtensionsFromBase(baseId);
+        }
+    }
+
+    // 若 extRefs 非空，继续使用原有的手动解析逻辑
+    if (!extRefs.empty()) {
+        auto manualExtensionDef = makeManualExtensionDefine(extRefs);
         if (!manualExtensionDef) {
             return LINGLONG_ERR(manualExtensionDef);
         }
@@ -572,9 +914,140 @@ RunContext::fillContextCfg(linglong::generator::ContainerCfgBuilder &builder)
         return res;
     }
 
+    // === begin: merge Global->Base->App config ===
+    std::string currentAppId;
+    if (appLayer) currentAppId = appLayer->getReference().id;
+    else if (!targetId.empty()) currentAppId = targetId;
+
+    std::string currentBaseId;
+    if (baseLayer) currentBaseId = baseLayer->getReference().id;
+
+    auto mergedCfg = loadMergedJsonWithBase(currentAppId, currentBaseId);
+    std::optional<std::string> mergedPath;
+
+    // 1) common env
+    {
+        std::vector<std::string> envKVs;
+        collectEnvFromJson(mergedCfg, envKVs);
+        if (!envKVs.empty()) {
+            std::map<std::string, std::string> genEnv;
+            std::string basePath;
+            if (auto sysPath = ::getenv("PATH")) {
+                basePath = sysPath;
+            }
+            auto extPathIt = environment.find("PATH");
+            for (const auto &kv : envKVs) {
+                auto pos = kv.find("+=");
+                if (pos != std::string::npos) {
+                    auto key = kv.substr(0, pos);
+                    auto add = kv.substr(pos + 2);
+                    if (key == "PATH") {
+                        if (genEnv.count("PATH")) {
+                            genEnv["PATH"] += ":" + add;
+                        } else if (extPathIt != environment.end()) {
+                            genEnv["PATH"] =
+                              extPathIt->second.empty() ? add : extPathIt->second + ":" + add;
+                        } else if (!basePath.empty()) {
+                            genEnv["PATH"] = basePath + ":" + add;
+                        } else {
+                            genEnv["PATH"] = add;
+                        }
+                    } else {
+                        qWarning() << "ignore '+=' env for key:" << QString::fromStdString(key);
+                    }
+                    continue;
+                }
+                auto eq = kv.find('=');
+                if (eq == std::string::npos) {
+                    continue;
+                }
+                genEnv[kv.substr(0, eq)] = kv.substr(eq + 1);
+            }
+            if (!genEnv.empty()) {
+                if (auto it = genEnv.find("PATH"); it != genEnv.end()) {
+                    mergedPath = it->second;
+                }
+                builder.appendEnv(genEnv);
+            }
+        }
+    }
+
+    // 2) common filesystem
+    {
+        std::vector<ocppi::runtime::config::types::Mount> cfgMounts;
+        collectMountsFromJson(currentAppId, mergedCfg, cfgMounts);
+        if (!cfgMounts.empty()) builder.addExtraMounts(cfgMounts);
+    }
+    // === end: merge Global->Base->App config ===
+
     if (!environment.empty()) {
+        if (auto it = environment.find("PATH"); it != environment.end()) {
+            mergedPath = it->second;
+        }
         builder.appendEnv(environment);
     }
+
+    // === begin: command-level settings (highest priority) ===
+    {
+        std::string execName = currentAppId;
+        if (!execName.empty()) {
+            if (const json *node = pickCommandNode(mergedCfg, execName)) {
+                CommandSettings cs = parseCommandSettings(currentAppId, *node);
+
+                if (!cs.envKVs.empty()) {
+                    std::map<std::string, std::string> cmdEnv;
+                    std::string basePath;
+                    if (auto sysPath = ::getenv("PATH")) {
+                        basePath = sysPath;
+                    }
+                    auto extPathIt = environment.find("PATH");
+                    for (const auto &kv : cs.envKVs) {
+                        auto posp = kv.find("+=");
+                        if (posp != std::string::npos) {
+                            auto key = kv.substr(0, posp);
+                            auto add = kv.substr(posp + 2);
+                            if (key == "PATH") {
+                                if (cmdEnv.count("PATH")) {
+                                    cmdEnv["PATH"] += ":" + add;
+                                } else if (mergedPath) {
+                                    cmdEnv["PATH"] =
+                                      mergedPath->empty() ? add : *mergedPath + ":" + add;
+                                } else if (extPathIt != environment.end()) {
+                                    cmdEnv["PATH"] =
+                                      extPathIt->second.empty()
+                                        ? add
+                                        : extPathIt->second + ":" + add;
+                                } else if (!basePath.empty()) {
+                                    cmdEnv["PATH"] = basePath + ":" + add;
+                                } else {
+                                    cmdEnv["PATH"] = add;
+                                }
+                            } else {
+                                qWarning() << "ignore '+=' env for key in command settings:"
+                                           << QString::fromStdString(key);
+                            }
+                            continue;
+                        }
+                        auto eq = kv.find('=');
+                        if (eq == std::string::npos) {
+                            continue;
+                        }
+                        cmdEnv[kv.substr(0, eq)] = kv.substr(eq + 1);
+                    }
+                    if (!cmdEnv.empty()) {
+                        if (auto it = cmdEnv.find("PATH"); it != cmdEnv.end()) {
+                            mergedPath = it->second;
+                        }
+                        builder.appendEnv(cmdEnv);
+                    }
+                }
+
+                if (!cs.mounts.empty()) builder.addExtraMounts(cs.mounts);
+                // TODO: when builder exposes API for entrypoint/cwd/args, apply here as well.
+            }
+        }
+    }
+    // === end: command-level settings ===
 
     detectDisplaySystem(builder);
 
