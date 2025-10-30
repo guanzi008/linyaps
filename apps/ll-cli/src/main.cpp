@@ -656,36 +656,42 @@ linglong::utils::error::Result<linglong::repo::OSTreeRepo *> initOSTreeRepo()
 // ===== begin: ll-cli config helpers =====
 using json = nlohmann::json;
 
-static constexpr const char kConfigUsageLines[] =
-  "  ll-cli config set-extensions [--global | <appid> | --base <baseid>] ext1,ext2\n"
-  "  ll-cli config add-extensions [--global | <appid> | --base <baseid>] ext1,ext2\n"
-  "  ll-cli config set-env        [--global | <appid> | --base <baseid>] KEY=VAL [KEY=VAL ...]\n"
-  "  ll-cli config unset-env      [--global | <appid> | --base <baseid>] KEY [KEY ...]\n"
-  "  ll-cli config add-fs         [--global | <appid> | --base <baseid>] --host PATH --target "
-  "PATH [--mode ro|rw] [--persist]\n"
-  "  ll-cli config rm-fs          [--global | <appid> | --base <baseid>] (--target PATH | "
-  "--index N)\n"
-  "  ll-cli config add-fs-allow   [--global | <appid> | --base <baseid>] --host PATH --target "
-  "PATH [--mode ro|rw] [--persist]\n"
-  "  ll-cli config rm-fs-allow    [--global | <appid> | --base <baseid>] (--target PATH | "
-  "--index N)\n"
-  "  ll-cli config clear-fs-allow [--global | <appid> | --base <baseid>]\n"
-  "  ll-cli config set-command    [--global | <appid> | --base <baseid>] <cmd> [--entrypoint P] "
-  "[--cwd D] [--args-prefix \"...\"] [--args-suffix \"...\"] [KEY=VAL ...]\n"
-  "  ll-cli config unset-command  [--global | <appid> | --base <baseid>] <cmd>\n";
+static std::string configUsageLines()
+{
+    return std::string{
+        _("  ll-cli config set-extensions [--global | <appid> | --base <baseid>] ext1,ext2\n"
+           "  ll-cli config add-extensions [--global | <appid> | --base <baseid>] ext1,ext2\n"
+           "  ll-cli config set-env        [--global | <appid> | --base <baseid>] KEY=VAL [KEY=VAL ...]\n"
+           "  ll-cli config unset-env      [--global | <appid> | --base <baseid>] KEY [KEY ...]\n"
+           "  ll-cli config add-fs         [--global | <appid> | --base <baseid>] --host PATH --target PATH [--mode "
+           "ro|rw] [--persist]\n"
+           "  ll-cli config rm-fs          [--global | <appid> | --base <baseid>] (--target PATH | --index N)\n"
+           "  ll-cli config add-fs-allow   [--global | <appid> | --base <baseid>] --host PATH --target PATH [--mode "
+           "ro|rw] [--persist]\n"
+           "  ll-cli config rm-fs-allow    [--global | <appid> | --base <baseid>] (--target PATH | --index N)\n"
+           "  ll-cli config clear-fs-allow [--global | <appid> | --base <baseid>]\n"
+           "  ll-cli config set-command    [--global | <appid> | --base <baseid>] <cmd> [--entrypoint P] [--cwd D] "
+           "[--args-prefix \"...\"] [--args-suffix \"...\"] [KEY=VAL ...]\n"
+           "  ll-cli config unset-command  [--global | <appid> | --base <baseid>] <cmd>\n") };
+}
 
-static constexpr const char kConfigShortHelp[] =
-  "Configuration commands:\n"
-  "  config                      Manage ll-cli configuration (see `ll-cli config --help`)\n";
+static std::string configShortHelp()
+{
+    return std::string{ _("Configuration commands:\n"
+                          "  config                      Manage ll-cli configuration (see `ll-cli config --help`)\n") };
+}
 
-static constexpr const char kFooterMessage[] =
-  "If you found any problems during use,\n"
-  "You can report bugs to the linyaps team under this project: https://github.com/OpenAtom-Linyaps/"
-  "linyaps/issues";
+static std::string configFooterMessage()
+{
+    return std::string{ _("If you found any problems during use,\n"
+                          "You can report bugs to the linyaps team under this project: "
+                          "https://github.com/OpenAtom-Linyaps/linyaps/issues") };
+}
 
 static void printConfigUsage(FILE *stream = stderr)
 {
-    std::fprintf(stream, "Usage:\n%s", kConfigUsageLines);
+    auto usageLines = configUsageLines();
+    std::fprintf(stream, "%s\n%s", _("Usage:"), usageLines.c_str());
 }
 
 enum class Scope { Global, App, Base };
@@ -1498,18 +1504,33 @@ int runCliApplication(int argc, char **mainArgv)
     CLI::App commandParser{ _(
       "linyaps CLI\n"
       "A CLI program to run application and manage application and runtime\n") };
-    commandParser.formatter(std::make_shared<ConfigAwareFormatter>(kConfigShortHelp,
-                                                                   std::string("Configuration commands:\n")
-                                                                     + kConfigUsageLines,
-                                                                   _(kFooterMessage)));
+    auto shortConfigHelp = configShortHelp();
+    auto fullConfigHelp = shortConfigHelp + configUsageLines();
+    commandParser.formatter(std::make_shared<ConfigAwareFormatter>(shortConfigHelp,
+                                                                   fullConfigHelp,
+                                                                   configFooterMessage()));
+    commandParser.option_defaults()->group(_("Options"));
+    if (auto formatter = commandParser.get_formatter()) {
+        formatter->label("OPTIONS", _("OPTIONS"));
+        formatter->label("SUBCOMMAND", _("SUBCOMMAND"));
+        formatter->label("SUBCOMMANDS", _("SUBCOMMANDS"));
+        formatter->label("POSITIONALS", _("POSITIONALS"));
+        formatter->label("Usage", _("Usage"));
+        formatter->label("REQUIRED", _("REQUIRED"));
+    }
     auto argv = commandParser.ensure_utf8(mainArgv);
     if (argc == 1) {
         std::cout << commandParser.help() << std::endl;
         return 0;
     }
 
-    commandParser.get_help_ptr()->description(_("Print this help message and exit"));
-    commandParser.set_help_all_flag("--help-all", _("Expand all help"));
+    if (auto *helpOption = commandParser.get_help_ptr()) {
+        helpOption->description(_("Print this help message and exit"));
+        helpOption->group(_("Options"));
+    }
+    if (auto *helpAllOption = commandParser.set_help_all_flag("--help-all", _("Expand all help"))) {
+        helpAllOption->group(_("Options"));
+    }
     commandParser.usage(_("Usage: ll-cli [OPTIONS] [SUBCOMMAND]"));
     commandParser.footer("");
 
