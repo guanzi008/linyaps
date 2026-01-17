@@ -6,14 +6,104 @@
 
 #include "linglong/common/display.h"
 #include "linglong/extension/extension.h"
+#include "linglong/runtime/host_nvidia_extension.h"
 #include "linglong/runtime/container_builder.h"
 #include "linglong/utils/log/log.h"
 
 #include <fmt/ranges.h>
 
+#include <string_view>
 #include <utility>
+#include <unordered_set>
 
 namespace linglong::runtime {
+
+namespace {
+
+constexpr std::string_view kNvidiaExtensionPrefix =
+  extension::ExtensionImplNVIDIADisplayDriver::Identify;
+
+bool isNvidiaDriverExtensionName(std::string_view name)
+{
+    return name.rfind(kNvidiaExtensionPrefix, 0) == 0;
+}
+
+std::vector<std::string> splitEnvPaths(const std::string &value)
+{
+    std::vector<std::string> parts;
+    size_t start = 0;
+    while (start <= value.size()) {
+        size_t end = value.find(':', start);
+        auto part = (end == std::string::npos) ? value.substr(start) : value.substr(start, end - start);
+        if (!part.empty()) {
+            parts.push_back(part);
+        }
+        if (end == std::string::npos) {
+            break;
+        }
+        start = end + 1;
+    }
+    return parts;
+}
+
+std::string mergePathValues(const std::string &preferred, const std::string &existing)
+{
+    std::vector<std::string> ordered;
+    std::unordered_set<std::string> seen;
+    for (const auto &part : splitEnvPaths(preferred)) {
+        if (seen.insert(part).second) {
+            ordered.push_back(part);
+        }
+    }
+    for (const auto &part : splitEnvPaths(existing)) {
+        if (seen.insert(part).second) {
+            ordered.push_back(part);
+        }
+    }
+    std::string merged;
+    for (size_t i = 0; i < ordered.size(); ++i) {
+        if (i) {
+            merged.push_back(':');
+        }
+        merged.append(ordered[i]);
+    }
+    return merged;
+}
+
+void mergeEnv(std::map<std::string, std::string> &base,
+              const std::map<std::string, std::string> &extra)
+{
+    static const std::unordered_set<std::string> pathKeys = {
+        "LD_LIBRARY_PATH",
+        "EGL_EXTERNAL_PLATFORM_CONFIG_DIRS",
+        "__EGL_EXTERNAL_PLATFORM_CONFIG_DIRS",
+        "__EGL_VENDOR_LIBRARY_DIRS",
+        "VK_ICD_FILENAMES",
+        "VK_ADD_DRIVER_FILES",
+    };
+
+    for (const auto &pair : extra) {
+        const auto &key = pair.first;
+        const auto &value = pair.second;
+        if (value.empty()) {
+            continue;
+        }
+        if (pathKeys.find(key) != pathKeys.end()) {
+            auto it = base.find(key);
+            std::string merged = mergePathValues(value, it != base.end() ? it->second : "");
+            if (!merged.empty()) {
+                base[key] = merged;
+            }
+            continue;
+        }
+        auto it = base.find(key);
+        if (it == base.end() || it->second.empty()) {
+            base[key] = value;
+        }
+    }
+}
+
+} // namespace
 
 utils::error::Result<RuntimeLayer> RuntimeLayer::create(package::Reference ref, RunContext &context)
 {
@@ -87,6 +177,7 @@ utils::error::Result<void> RunContext::resolve(const linglong::package::Referenc
                                                const ResolveOptions &options)
 {
     LINGLONG_TRACE("resolve RunContext from runnable " + runnable.toString());
+    hostNvidiaExtensionName.reset();
 
     auto layer = RuntimeLayer::create(runnable, *this);
     if (!layer) {
@@ -202,6 +293,7 @@ utils::error::Result<void> RunContext::resolve(const api::types::v1::BuilderProj
                                                const std::filesystem::path &buildOutput)
 {
     LINGLONG_TRACE("resolve RunContext from builder project " + target.package.id);
+    hostNvidiaExtensionName.reset();
 
     auto targetRef = package::Reference::fromBuilderProject(target);
     if (!targetRef) {
@@ -430,6 +522,13 @@ RunContext::resolveExtension(const std::vector<api::types::v1::ExtensionDefine> 
           repo.clearReference(*fuzzyRef, { .fallbackToRemote = false, .semanticMatching = true });
         if (!ref) {
             LogD("extension is not installed: {}", fuzzyRef->toString());
+            if (isNvidiaDriverExtensionName(name)) {
+                if (!hostNvidiaExtensionName) {
+                    hostNvidiaExtensionName = name;
+                    LogI("use host NVIDIA driver fallback for {}", name);
+                }
+                continue;
+            }
             if (skipOnNotFound) {
                 continue;
             }
@@ -599,6 +698,7 @@ utils::error::Result<void> RunContext::fillContextCfg(
     }
 
     std::vector<ocppi::runtime::config::types::Mount> extensionMounts{};
+    std::optional<HostNvidiaExtension> hostNvidiaExtension;
     if (extensionOutput) {
         extensionMounts.push_back(ocppi::runtime::config::types::Mount{
           .destination = "/opt/extensions/" + targetId,
@@ -636,6 +736,41 @@ utils::error::Result<void> RunContext::fillContextCfg(
           .type = "bind",
           .uidMappings = {},
         });
+    }
+
+    if (hostNvidiaExtensionName) {
+        auto hostExt = prepareHostNvidiaExtension(bundle, *hostNvidiaExtensionName);
+        if (!hostExt) {
+            return LINGLONG_ERR(hostExt);
+        }
+        if (hostExt->has_value()) {
+            hostNvidiaExtension = std::move(*hostExt);
+            bool mountHostExtension =
+              !(extensionOutput && hostNvidiaExtension->name == targetId);
+            if (mountHostExtension) {
+                extensionMounts.push_back(ocppi::runtime::config::types::Mount{
+                  .destination = "/opt/extensions/" + hostNvidiaExtension->name,
+                  .gidMappings = {},
+                  .options = { { "rbind", "ro" } },
+                  .source = hostNvidiaExtension->root.string(),
+                  .type = "bind",
+                  .uidMappings = {},
+                });
+                for (const auto &node : hostNvidiaExtension->deviceNodes) {
+                    ocppi::runtime::config::types::Mount mount = {
+                        .destination = node.path,
+                        .options = { { "bind" } },
+                        .source = node.hostPath.value_or(node.path),
+                        .type = "bind",
+                    };
+                    builder.addExtraMount(mount);
+                }
+                if (!hostNvidiaExtension->extraMounts.empty()) {
+                    builder.addExtraMounts(hostNvidiaExtension->extraMounts);
+                }
+                mergeEnv(environment, hostNvidiaExtension->env);
+            }
+        }
     }
     if (!extensionMounts.empty()) {
         builder.setExtensionMounts(extensionMounts);
