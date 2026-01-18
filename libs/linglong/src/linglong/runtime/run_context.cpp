@@ -311,6 +311,13 @@ void applyFilesystemPermissions(generator::ContainerCfgBuilder &builder,
               .mapPrivate(std::string{ home } + "/.gnupg", true);
             if (!allowLinglongConfig) {
                 builder.mapPrivate(std::string{ home } + "/.config/linglong", true);
+                if (allowHostRoot) {
+                    std::filesystem::path hostCfg =
+                      std::filesystem::path("/run/host/rootfs")
+                      / std::filesystem::path(home).lexically_relative("/")
+                      / ".config/linglong";
+                    builder.mapPrivate(hostCfg.string(), true);
+                }
             }
         }
     }
@@ -1661,6 +1668,44 @@ std::optional<RunContext::CommandSettings> RunContext::commandSettings() const
     }
 
     return parseCommandSettings(appId, *node);
+}
+
+RunContext::HostAccessPolicy RunContext::hostAccessPolicy() const
+{
+    HostAccessPolicy policy;
+    if (!runtimeConfigEnabled) {
+        return policy;
+    }
+
+    auto appId = currentAppId();
+    if (appId.empty()) {
+        return policy;
+    }
+
+    std::string baseId;
+    if (baseLayer) {
+        baseId = baseLayer->getReference().id;
+    }
+
+    auto mergedCfg = loadMergedJsonWithBase(appId, baseId);
+    auto enabled = getPermissionSet(mergedCfg, "filesystem");
+
+    bool wantsHost = enabled.count("host") > 0;
+    bool wantsHostOS = enabled.count("host-os") > 0;
+    bool wantsHostEtc = enabled.count("host-etc") > 0;
+    bool wantsHome = enabled.count("home") > 0;
+
+    if (!wantsHost && !wantsHostOS && !wantsHostEtc && !wantsHome) {
+        wantsHost = true;
+        wantsHostOS = true;
+        wantsHome = true;
+    }
+
+    policy.allowHostOs = wantsHostOS;
+    policy.allowHostEtc = wantsHostEtc;
+    policy.allowHostRoot = wantsHost && allowHostRootAccess(mergedCfg, appId);
+
+    return policy;
 }
 
 utils::error::Result<std::filesystem::path> RunContext::getRuntimeLayerPath() const

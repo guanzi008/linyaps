@@ -592,7 +592,12 @@ int Cli::run(const RunOptions &options)
         }
     }
 
-    commands = filePathMapping(commands, options);
+    auto hostAccess = runContext.hostAccessPolicy();
+    commands = filePathMapping(commands,
+                               options,
+                               hostAccess.allowHostRoot,
+                               hostAccess.allowHostOs,
+                               hostAccess.allowHostEtc);
 
     // this lambda will dump reference of containerID, app, base and runtime to
     // /run/linglong/getuid()/getpid() to store these needed infomation
@@ -1705,13 +1710,16 @@ int Cli::content(const ContentOptions &options)
     return 0;
 }
 
-[[nodiscard]] std::string Cli::mappingFile(const std::filesystem::path &file) noexcept
+[[nodiscard]] std::string Cli::mappingFile(const std::filesystem::path &file,
+                                           bool allowHostRoot,
+                                           bool allowHostOs,
+                                           bool allowHostEtc) noexcept
 {
     std::error_code ec;
     auto target = file;
 
     if (!target.is_absolute()) {
-        return target;
+        return target.string();
     }
 
     if (std::filesystem::is_symlink(file, ec)) {
@@ -1731,17 +1739,38 @@ int Cli::content(const ContentOptions &options)
 
     // Dont't mapping the file under /home
     if (auto tmp = target.string(); tmp.rfind("/home/", 0) == 0) {
-        return target;
+        return target.string();
     }
 
-    return std::filesystem::path{ "/run/host/rootfs" }
-    / std::filesystem::path{ target }.lexically_relative("/");
+    auto targetStr = target.string();
+    auto relative = std::filesystem::path{ target }.lexically_relative("/");
+
+    if (allowHostRoot) {
+        return (std::filesystem::path{ "/run/host/rootfs" } / relative).string();
+    }
+
+    auto startsWith = [&targetStr](const std::string &prefix) {
+        return targetStr == prefix || targetStr.rfind(prefix + "/", 0) == 0;
+    };
+
+    if (allowHostOs && (startsWith("/usr") || startsWith("/lib") || startsWith("/lib64"))) {
+        return (std::filesystem::path{ "/run/host-os" } / relative).string();
+    }
+
+    if (allowHostEtc && startsWith("/etc")) {
+        return (std::filesystem::path{ "/run/host-etc" } / relative).string();
+    }
+
+    return targetStr;
 }
 
-[[nodiscard]] std::string Cli::mappingUrl(std::string_view url) noexcept
+[[nodiscard]] std::string Cli::mappingUrl(std::string_view url,
+                                          bool allowHostRoot,
+                                          bool allowHostOs,
+                                          bool allowHostEtc) noexcept
 {
     if (url.rfind('/', 0) == 0) {
-        return mappingFile(url);
+        return mappingFile(url, allowHostRoot, allowHostOs, allowHostEtc);
     }
 
     // if the scheme of url is "file", we need to map the native file path to the corresponding
@@ -1749,7 +1778,10 @@ int Cli::content(const ContentOptions &options)
     constexpr std::string_view filePrefix = "file://";
     if (url.rfind(filePrefix, 0) == 0) {
         std::filesystem::path nativePath = url.substr(filePrefix.size());
-        std::filesystem::path target = mappingFile(nativePath);
+        std::filesystem::path target = mappingFile(nativePath,
+                                                   allowHostRoot,
+                                                   allowHostOs,
+                                                   allowHostEtc);
         return std::string{ filePrefix } + target.string();
     }
 
@@ -1757,7 +1789,10 @@ int Cli::content(const ContentOptions &options)
 }
 
 std::vector<std::string> Cli::filePathMapping(const std::vector<std::string> &command,
-                                              const RunOptions &options) const noexcept
+                                              const RunOptions &options,
+                                              bool allowHostRoot,
+                                              bool allowHostOs,
+                                              bool allowHostEtc) const noexcept
 {
     // FIXME: couldn't handel command like 'll-cli run org.xxx.yyy --file f1 f2 f3 org.xxx.yyy %%F'
     // can't distinguish the boundary of command , need validate the command arguments in the future
@@ -1783,7 +1818,7 @@ std::vector<std::string> Cli::filePathMapping(const std::vector<std::string> &co
                     continue;
                 }
 
-                execArgs.emplace_back(mappingFile(file));
+                execArgs.emplace_back(mappingFile(file, allowHostRoot, allowHostOs, allowHostEtc));
             }
 
             continue;
@@ -1799,7 +1834,7 @@ std::vector<std::string> Cli::filePathMapping(const std::vector<std::string> &co
                     continue;
                 }
 
-                execArgs.emplace_back(mappingUrl(url));
+                execArgs.emplace_back(mappingUrl(url, allowHostRoot, allowHostOs, allowHostEtc));
             }
 
             continue;
