@@ -4,6 +4,7 @@
 
 #include "run_context.h"
 
+#include "configure.h"
 #include "linglong/common/display.h"
 #include "linglong/extension/extension.h"
 #include "linglong/runtime/container_builder.h"
@@ -82,6 +83,23 @@ std::string mergePathValues(const std::string &preferred, const std::string &exi
         merged.append(ordered[i]);
     }
     return merged;
+}
+
+std::optional<std::string> findIconRewriteLib()
+{
+    std::string installLib = std::string(LINGLONG_LIBDIR) + "/libll-icon-rewrite.so";
+    static const std::vector<std::string> candidates = {
+        installLib,
+        "/usr/lib/libll-icon-rewrite.so",
+        "/usr/lib64/libll-icon-rewrite.so",
+    };
+    std::error_code ec;
+    for (const auto &path : candidates) {
+        if (std::filesystem::exists(path, ec)) {
+            return path;
+        }
+    }
+    return std::nullopt;
 }
 
 void mergeEnv(std::map<std::string, std::string> &base,
@@ -1338,6 +1356,16 @@ utils::error::Result<void> RunContext::fillContextCfg(
             builder.setRuntimePath(
               runtimeLayer->getLayerDir()->absoluteFilePath("files").toStdString());
         }
+    }
+
+    if (auto libPath = findIconRewriteLib(); libPath) {
+        builder.addExtraMount(ocppi::runtime::config::types::Mount{
+          .destination = *libPath,
+          .options = { { "bind", "ro" } },
+          .source = *libPath,
+          .type = "bind",
+        });
+        builder.appendEnv("LINGLONG_ICON_REWRITE_LIB", *libPath, true);
     }
 
     std::vector<ocppi::runtime::config::types::Mount> extensionMounts{};
