@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 UnionTech Software Technology Co., Ltd.
+#
+# SPDX-License-Identifier: LGPL-3.0-or-later
+
+[D-BUS Service]
+Name=org.deepin.linglong.UdevSync1
+Exec=@CMAKE_INSTALL_FULL_LIBEXECDIR@/linglong/ll-udev-syncd
+User=root
+SystemdService=org.deepin.linglong.UdevSync.service

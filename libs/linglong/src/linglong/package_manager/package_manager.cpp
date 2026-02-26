@@ -34,6 +34,7 @@
 #include "linglong/utils/transaction.h"
 
 #include <QDBusInterface>
+#include <QDBusMessage>
 #include <QDBusReply>
 #include <QDBusUnixFileDescriptor>
 #include <QEventLoop>
@@ -42,6 +43,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <filesystem>
 #include <utility>
 
 #include <fcntl.h>
@@ -51,6 +53,9 @@ namespace linglong::service {
 namespace {
 
 constexpr auto repoLockPath = "/run/linglong/lock";
+constexpr auto udevSyncService = "org.deepin.linglong.UdevSync1";
+constexpr auto udevSyncObjectPath = "/org/deepin/linglong/UdevSync1";
+constexpr auto udevSyncInterface = "org.deepin.linglong.UdevSync1";
 
 template <typename T>
 QVariantMap toDBusReply(const utils::error::Result<T> &x, std::string type = "display") noexcept
@@ -71,6 +76,88 @@ QVariantMap toDBusReply(utils::error::ErrorCode code,
       api::types::v1::CommonResult{ .code = static_cast<int>(code), // NOLINT
                                     .message = message,             // NOLINT
                                     .type = type });
+}
+
+utils::error::Result<void> callUdevSyncMethod(const QString &method, const QVariantList &arguments)
+{
+    LINGLONG_TRACE("call udev sync method");
+
+    auto systemBus = QDBusConnection::systemBus();
+    if (!systemBus.isConnected()) {
+        return LINGLONG_ERR("system bus is disconnected");
+    }
+
+    auto message = QDBusMessage::createMethodCall(
+      udevSyncService, udevSyncObjectPath, udevSyncInterface, method);
+    message.setArguments(arguments);
+
+    auto reply = systemBus.call(message, QDBus::Block, 30000);
+    if (reply.type() == QDBusMessage::ErrorMessage) {
+        return LINGLONG_ERR(fmt::format("udev sync method {} failed: {}",
+                                        method.toStdString(),
+                                        reply.errorMessage().toStdString()));
+    }
+
+    if (!reply.arguments().isEmpty()) {
+        const auto &result = reply.arguments().front();
+        if (result.canConvert<bool>() && !result.toBool()) {
+            return LINGLONG_ERR(
+              fmt::format("udev sync method {} returned false", method.toStdString()));
+        }
+    }
+
+    return LINGLONG_OK;
+}
+
+utils::error::Result<std::filesystem::path> resolveInstalledAppRulesDir(repo::OSTreeRepo &repo,
+                                                                         const std::string &appId)
+{
+    LINGLONG_TRACE("resolve installed app udev rules dir");
+
+    auto fuzzyRef = package::FuzzyReference::parse(appId);
+    if (!fuzzyRef) {
+        return LINGLONG_ERR("failed to parse app id", fuzzyRef);
+    }
+
+    auto localRef = repo.clearReference(*fuzzyRef,
+                                        {
+                                          .forceRemote = false,
+                                          .fallbackToRemote = false,
+                                        });
+    if (!localRef) {
+        return LINGLONG_ERR("failed to resolve local app reference for udev rules", localRef);
+    }
+
+    auto layerDir = repo.getLayerDir(*localRef);
+    if (!layerDir) {
+        return LINGLONG_ERR("failed to locate layer dir when resolving udev rules", layerDir);
+    }
+
+    return layerDir->filesDirPath() / "etc" / "udev" / "rules.d";
+}
+
+utils::error::Result<void> acquireRuntimeAppUdevRules(repo::OSTreeRepo &repo,
+                                                       const std::string &appId,
+                                                       qulonglong clientPid)
+{
+    LINGLONG_TRACE("acquire runtime app udev rules");
+
+    auto sourceRulesDir = resolveInstalledAppRulesDir(repo, appId);
+    if (!sourceRulesDir) {
+        return LINGLONG_ERR(sourceRulesDir);
+    }
+
+    return callUdevSyncMethod(
+      "AcquireAppRules",
+      { QString::fromStdString(appId), QString::fromStdString(sourceRulesDir->string()), clientPid });
+}
+
+utils::error::Result<void> releaseRuntimeAppUdevRules(const std::string &appId, qulonglong clientPid)
+{
+    LINGLONG_TRACE("release runtime app udev rules");
+
+    return callUdevSyncMethod("ReleaseAppRules",
+                              { QString::fromStdString(appId), clientPid });
 }
 
 } // namespace
@@ -1525,6 +1612,48 @@ PackageManager::Prune(std::vector<api::types::v1::PackageInfoV2> &removed) noexc
         return LINGLONG_ERR(pruneRet);
     }
     return LINGLONG_OK;
+}
+
+bool PackageManager::ActivateAppRuntimeUdevRules(const QString &appId, qulonglong clientPid) noexcept
+{
+    if (appId.isEmpty() || clientPid <= 1) {
+        LogW("invalid runtime udev acquire request: appId={}, pid={}",
+             appId.toStdString(),
+             clientPid);
+        return false;
+    }
+
+    auto ret = acquireRuntimeAppUdevRules(this->repo, appId.toStdString(), clientPid);
+    if (!ret) {
+        LogW("failed to acquire runtime udev rules for {} (pid={}): {}",
+             appId.toStdString(),
+             clientPid,
+             ret.error());
+        return false;
+    }
+
+    return true;
+}
+
+bool PackageManager::DeactivateAppRuntimeUdevRules(const QString &appId, qulonglong clientPid) noexcept
+{
+    if (appId.isEmpty() || clientPid <= 1) {
+        LogW("invalid runtime udev release request: appId={}, pid={}",
+             appId.toStdString(),
+             clientPid);
+        return false;
+    }
+
+    auto ret = releaseRuntimeAppUdevRules(appId.toStdString(), clientPid);
+    if (!ret) {
+        LogW("failed to release runtime udev rules for {} (pid={}): {}",
+             appId.toStdString(),
+             clientPid,
+             ret.error());
+        return false;
+    }
+
+    return true;
 }
 
 void PackageManager::ReplyInteraction([[maybe_unused]] QDBusObjectPath object_path,

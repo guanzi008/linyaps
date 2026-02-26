@@ -58,6 +58,8 @@ public
     auto Update(const QVariantMap &parameters) noexcept -> QVariantMap;
     auto Search(const QVariantMap &parameters) noexcept -> QVariantMap;
     auto Prune() noexcept -> QVariantMap;
+    bool ActivateAppRuntimeUdevRules(const QString &appId, qulonglong clientPid) noexcept;
+    bool DeactivateAppRuntimeUdevRules(const QString &appId, qulonglong clientPid) noexcept;
     void ReplyInteraction(QDBusObjectPath object_path, const QVariantMap &replies);
 
     // Nothing to do here, Permissions() will be rejected in org.deepin.linglong.PackageManager.conf

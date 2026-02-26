@@ -329,6 +329,7 @@ pfl_add_libraries(
   ll-dialog
   ll-builder
   ll-cli
+  ll-udev-syncd
   ll-package-manager
   llpkg
   ll-session-helper

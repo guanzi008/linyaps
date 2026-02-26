@@ -29,6 +29,7 @@ configure_files(
   lib/linglong/generate-xdg-data-dirs.sh
   lib/systemd/system-environment-generators/61-linglong
   lib/systemd/system/org.deepin.linglong.PackageManager.service
+  lib/systemd/system/org.deepin.linglong.UdevSync.service
   lib/systemd/system-preset/91-linglong.preset
   lib/systemd/user-generators/linglong-user-systemd-generator
   lib/systemd/user/linglong-session-helper.service
@@ -42,7 +43,9 @@ configure_files(
   share/zsh/vendor-completions/_ll-cli
   share/fish/vendor_completions.d/ll-cli.fish
   share/dbus-1/system.d/org.deepin.linglong.PackageManager1.conf
+  share/dbus-1/system.d/org.deepin.linglong.UdevSync1.conf
   share/dbus-1/system-services/org.deepin.linglong.PackageManager1.service
+  share/dbus-1/system-services/org.deepin.linglong.UdevSync1.service
   share/linglong/export-dirs.json
   share/linglong/builder/templates/example.yaml
   share/linglong/builder/uab/blacklist
