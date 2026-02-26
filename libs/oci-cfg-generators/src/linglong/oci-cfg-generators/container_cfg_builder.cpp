@@ -2046,16 +2046,16 @@ bool ContainerCfgBuilder::constructMountpointsTree() noexcept
         int child = insertChildRecursively(destination, inserted);
         auto &mp = mountpoints[child];
 
-        if (inserted) {
-            // attach to mounts
-            mp.mount_idx = static_cast<int>(i);
-            if (mount.options) {
-                auto find =
-                  std::find_if(mount.options->begin(), mount.options->end(), [](const auto &opt) {
-                      return opt == "ro";
-                  });
-                mp.ro = find != mount.options->end();
-            }
+        // Always attach the latest mount for the same destination.
+        // This makes mount behavior follow merge order (last wins), which is required for
+        // replacing defaults such as /dev tmpfs with an explicit bind mount.
+        mp.mount_idx = static_cast<int>(i);
+        if (mount.options) {
+            auto find =
+              std::find_if(mount.options->begin(), mount.options->end(), [](const auto &opt) {
+                  return opt == "ro";
+              });
+            mp.ro = find != mount.options->end();
         }
     }
 
