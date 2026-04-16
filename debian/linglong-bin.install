@@ -13,10 +13,10 @@ usr/lib/sysusers.d/linglong.conf
 usr/lib/tmpfiles.d/linglong.conf
 usr/libexec/linglong/ll-package-manager
 usr/libexec/linglong/ll-session-helper
-usr/libexec/linglong/ll-driver-detect
 usr/libexec/linglong/ld-cache-generator
 usr/libexec/linglong/font-cache-generator
 usr/libexec/linglong/ll-dialog
+usr/libexec/linglong/ll-driver-detect
 usr/libexec/linglong/dialog/99-linglong-permission
 usr/libexec/linglong/ll-init
 usr/share/bash-completion/completions/ll-cli
