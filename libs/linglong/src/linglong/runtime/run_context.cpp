@@ -37,14 +37,16 @@ std::string mergePathValues(const std::string &preferred, const std::string &exi
     std::unordered_set<std::string> seen;
     for (const auto &part : common::strings::split(
            preferred, ':', common::strings::splitOption::SkipEmpty)) {
-        if (seen.insert(part).second) {
-            ordered.push_back(part);
+        auto value = std::string(part);
+        if (seen.insert(value).second) {
+            ordered.push_back(std::move(value));
         }
     }
     for (const auto &part : common::strings::split(
            existing, ':', common::strings::splitOption::SkipEmpty)) {
-        if (seen.insert(part).second) {
-            ordered.push_back(part);
+        auto value = std::string(part);
+        if (seen.insert(value).second) {
+            ordered.push_back(std::move(value));
         }
     }
     return common::strings::join(ordered, ':');
