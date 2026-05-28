@@ -109,6 +109,8 @@ pfl_add_library(
   src/linglong/runtime/container_builder.h
   src/linglong/runtime/container.cpp
   src/linglong/runtime/container.h
+  src/linglong/runtime/host_nvidia_extension.cpp
+  src/linglong/runtime/host_nvidia_extension.h
   src/linglong/runtime/layer.cpp
   src/linglong/runtime/layer.h
   src/linglong/runtime/overlayfs_driver.cpp
