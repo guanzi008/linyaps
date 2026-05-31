@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <initializer_list>
 #include <optional>
 #include <sstream>
 #include <string_view>
@@ -731,6 +732,19 @@ void appendEnvPath(std::map<std::string, std::string> &envMap,
     envMap[key] = linglong::common::strings::join(ordered, ':');
 }
 
+std::vector<std::string> withDefaultPaths(std::vector<std::string> paths,
+                                          std::initializer_list<std::string_view> defaults)
+{
+    std::unordered_set<std::string> seen(paths.begin(), paths.end());
+    for (auto path : defaults) {
+        auto value = std::string(path);
+        if (!value.empty() && seen.insert(value).second) {
+            paths.push_back(std::move(value));
+        }
+    }
+    return paths;
+}
+
 bool ensureSymlink(const std::filesystem::path &target, const std::filesystem::path &linkPath)
 {
     auto ret = linglong::utils::ensureDirectory(linkPath.parent_path());
@@ -755,7 +769,8 @@ bool ensureSymlink(const std::filesystem::path &target, const std::filesystem::p
 
 utils::error::Result<std::optional<HostNvidiaExtension>>
 prepareHostNvidiaExtension(const std::filesystem::path &bundle,
-                           const std::string &extensionName) noexcept
+                           const std::string &extensionName,
+                           bool exposeVulkanDriverFile) noexcept
 {
     LINGLONG_TRACE("prepare host NVIDIA extension");
 
@@ -955,7 +970,7 @@ prepareHostNvidiaExtension(const std::filesystem::path &bundle,
             appendUnique(eglExternalDirSet, eglExternalDirs, parent.string());
         } else if (parent.filename() == "egl_vendor.d") {
             appendUnique(eglVendorDirSet, eglVendorDirs, parent.string());
-        } else if (parent.filename() == "icd.d"
+        } else if (exposeVulkanDriverFile && parent.filename() == "icd.d"
                    && parent.parent_path().filename() == "vulkan") {
             appendUnique(vkIcdFileSet, vkIcdFiles, containerPath.string());
         }
@@ -1065,10 +1080,17 @@ prepareHostNvidiaExtension(const std::filesystem::path &bundle,
                       }
                       return dirs;
                   }());
-    appendEnvPath(ext.env, "EGL_EXTERNAL_PLATFORM_CONFIG_DIRS", eglExternalDirs);
-    appendEnvPath(ext.env, "__EGL_EXTERNAL_PLATFORM_CONFIG_DIRS", eglExternalDirs);
-    appendEnvPath(ext.env, "__EGL_VENDOR_LIBRARY_DIRS", eglVendorDirs);
-    appendEnvPath(ext.env, "VK_ICD_FILENAMES", vkIcdFiles);
+    auto eglExternalSearchDirs =
+      withDefaultPaths(eglExternalDirs,
+                       { "/usr/share/egl/egl_external_platform.d",
+                         "/etc/egl/egl_external_platform.d" });
+    auto eglVendorSearchDirs =
+      withDefaultPaths(eglVendorDirs,
+                       { "/usr/share/glvnd/egl_vendor.d", "/etc/glvnd/egl_vendor.d" });
+
+    appendEnvPath(ext.env, "EGL_EXTERNAL_PLATFORM_CONFIG_DIRS", eglExternalSearchDirs);
+    appendEnvPath(ext.env, "__EGL_EXTERNAL_PLATFORM_CONFIG_DIRS", eglExternalSearchDirs);
+    appendEnvPath(ext.env, "__EGL_VENDOR_LIBRARY_DIRS", eglVendorSearchDirs);
     appendEnvPath(ext.env, "VK_ADD_DRIVER_FILES", vkIcdFiles);
 
     if (has64 || has32) {
